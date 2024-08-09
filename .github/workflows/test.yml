@@ -1,0 +1,74 @@
+name: Install BookStack
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  install-bookstack:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y apache2 mysql-server php libapache2-mod-php php-mysql php-ldap php-tidy php-xml php-mbstring php-gd curl git unzip
+
+    - name: Clone BookStack
+      run: |
+        git clone https://github.com/BookStackApp/BookStack.git /var/www/bookstack
+        cd /var/www/bookstack
+        git checkout release
+    
+    - name: Set Up Environment Variables
+      run: |
+        cp /var/www/bookstack/.env.example /var/www/bookstack/.env
+        sed -i 's/DB_DATABASE=bookstack/DB_DATABASE=bookstack_db/' /var/www/bookstack/.env
+        sed -i 's/DB_USERNAME=null/DB_USERNAME=root/' /var/www/bookstack/.env
+        sed -i 's/DB_PASSWORD=null/DB_PASSWORD=password/' /var/www/bookstack/.env
+    
+    - name: Create Database
+      run: |
+        sudo mysql -e "CREATE DATABASE bookstack_db;"
+        sudo mysql -e "CREATE USER 'root'@'localhost' IDENTIFIED BY 'password';"
+        sudo mysql -e "GRANT ALL ON bookstack_db.* TO 'root'@'localhost';"
+        sudo mysql -e "FLUSH PRIVILEGES;"
+    
+    - name: Install Composer
+      run: |
+        cd /var/www/bookstack
+        curl -sS https://getcomposer.org/installer | php
+        sudo php composer.phar install --no-dev
+        php artisan key:generate
+        php artisan migrate
+    
+    - name: Set Permissions
+      run: |
+        sudo chown -R www-data:www-data /var/www/bookstack
+        sudo chmod -R 755 /var/www/bookstack
+    
+    - name: Configure Apache
+      run: |
+        sudo bash -c 'cat > /etc/apache2/sites-available/bookstack.conf <<EOF
+        <VirtualHost *:80>
+            DocumentRoot /var/www/bookstack/public
+            <Directory /var/www/bookstack/public>
+                AllowOverride All
+                Require all granted
+            </Directory>
+        </VirtualHost>
+        EOF'
+        sudo a2ensite bookstack
+        sudo a2enmod rewrite
+        sudo systemctl restart apache2
+
+    - name: Test Installation
+      run: |
+        curl -I http://localhost
